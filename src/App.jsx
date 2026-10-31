@@ -20,6 +20,13 @@ import { AllApplications } from './pages/admin/AllApplications';
 import { ReviewApplication } from './pages/admin/ReviewApplication';
 import { ManageDocTypes } from './pages/admin/ManageDocTypes';
 import { ManageUsers } from './pages/admin/ManageUsers';
+import { ManageCertificates } from './pages/admin/ManageCertificates';
+
+// Public Verification Page
+import { VerifyCertificate } from './pages/public/VerifyCertificate';
+
+// AI Assistant Component
+import { CampusDocsAssistant } from './components/ai/CampusDocsAssistant';
 
 // Helper Root Redirect
 const RootRedirect = () => {
@@ -41,6 +48,9 @@ function App() {
         <Routes>
           {/* Public Authentication Route */}
           <Route path="/login" element={<LoginPage />} />
+
+          {/* Public Certificate Verification Route */}
+          <Route path="/verify/:token" element={<VerifyCertificate />} />
 
           {/* Root Redirection */}
           <Route path="/" element={<RootRedirect />} />
@@ -75,6 +85,7 @@ function App() {
             <Route path="dashboard" element={<AdminDashboard />} />
             <Route path="applications" element={<AllApplications />} />
             <Route path="review/:id" element={<ReviewApplication />} />
+            <Route path="certificates" element={<ManageCertificates />} />
             <Route path="doc-types" element={<ManageDocTypes />} />
             <Route path="users" element={<ManageUsers />} />
           </Route>
@@ -82,6 +93,9 @@ function App() {
           {/* Fallback Catch-all Route */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+
+        {/* Global CampusDocs AI Assistant & Document Forensics Copilot */}
+        <CampusDocsAssistant />
       </AuthProvider>
     </BrowserRouter>
   );

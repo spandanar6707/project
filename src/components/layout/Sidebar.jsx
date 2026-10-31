@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   GraduationCap,
   FileCheck2,
+  Award,
   X
 } from 'lucide-react';
 
@@ -26,6 +27,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
   const adminLinks = [
     { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Admin Dashboard' },
     { to: '/admin/applications', icon: FileCheck2, label: 'All Applications' },
+    { to: '/admin/certificates', icon: Award, label: 'Certificates & QR' },
     { to: '/admin/doc-types', icon: Layers, label: 'Document Catalogue' },
     { to: '/admin/users', icon: Users, label: 'User Directory' },
   ];

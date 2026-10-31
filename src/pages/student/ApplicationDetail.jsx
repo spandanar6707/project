@@ -11,6 +11,7 @@ import {
   triggerDownload,
   parseBatchMetadata
 } from '../../services/documentService';
+import { validateUploadFile } from '../../utils/fileSecurity';
 import {
   FileText,
   Clock,
@@ -128,6 +129,12 @@ export const ApplicationDetail = () => {
   const handleUploadForm = async (e) => {
     e.preventDefault();
     if (!selectedFile) return;
+
+    const validation = validateUploadFile(selectedFile);
+    if (!validation.valid) {
+      alert(validation.error);
+      return;
+    }
 
     try {
       setUploadLoading(true);
@@ -515,7 +522,7 @@ export const ApplicationDetail = () => {
             </div>
 
             {selectedFile && (
-              <div className="flex justify-end">
+              <div className="flex justify-end pt-2">
                 <button
                   type="submit"
                   disabled={uploadLoading}

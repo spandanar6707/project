@@ -11,6 +11,7 @@ import {
   triggerDownload,
   parseBatchMetadata
 } from '../../services/documentService';
+import { validateUploadFile } from '../../utils/fileSecurity';
 import {
   FileText,
   Clock,
@@ -31,8 +32,19 @@ import {
   Send,
   XCircle,
   HelpCircle,
-  Layers
+  Layers,
+  Sparkles,
+  QrCode,
+  Award,
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react';
+import { AIPriorityCard } from '../../components/admin/AIPriorityCard';
+import {
+  issueCertificate,
+  requestApplicationChanges,
+  reopenApplication,
+} from '../../services/certificateService';
 
 export const ReviewApplication = () => {
   const { id } = useParams();
@@ -49,9 +61,10 @@ export const ReviewApplication = () => {
   const [tatLoading, setTatLoading] = useState(false);
 
   // Decision Form State
-  const [decisionType, setDecisionType] = useState('approve'); // approve, reject, request_info
+  const [decisionType, setDecisionType] = useState('approve'); // approve, request_changes, reject
   const [answerMessage, setAnswerMessage] = useState('');
   const [certificateFile, setCertificateFile] = useState(null);
+  const [autoGenerateQr, setAutoGenerateQr] = useState(true);
   const [answerLoading, setAnswerLoading] = useState(false);
 
   const fetchRequest = async () => {
@@ -68,7 +81,7 @@ export const ReviewApplication = () => {
       } else {
         // Default prefilled message
         setAnswerMessage(
-          'Your document request has been processed and approved. The verified certificate is attached below.'
+          'Your document request has been processed and approved. The verified digital certificate with cryptographic QR code verification is attached below.'
         );
       }
     } catch (err) {
@@ -88,15 +101,15 @@ export const ReviewApplication = () => {
     setDecisionType(type);
     if (type === 'approve') {
       setAnswerMessage(
-        'Your document request has been approved and issued by the administration. The verified certificate is attached.'
+        'Your document request has been approved and issued by the administration. The verified digital certificate with cryptographic QR code verification is attached below.'
+      );
+    } else if (type === 'request_changes') {
+      setAnswerMessage(
+        'CORRECTION REQUIRED: Please update your stated purpose and upload a clear, uncropped copy of your student ID or fee receipt.'
       );
     } else if (type === 'reject') {
       setAnswerMessage(
         'REJECTED: Your application cannot be approved at this time due to institutional eligibility requirements.'
-      );
-    } else if (type === 'request_info') {
-      setAnswerMessage(
-        'Additional verification is required. Please download the attached form, fill in the necessary details, and upload it back to this application.'
       );
     }
   };
@@ -127,35 +140,93 @@ export const ReviewApplication = () => {
   const handleAnswerSubmit = async (e) => {
     e.preventDefault();
     if (!answerMessage.trim()) {
-      alert('Please enter an administrative message.');
+      alert('Please enter an administrative message or reason.');
       return;
     }
 
+    let fileToSend = certificateFile;
+
     try {
       setAnswerLoading(true);
+
+      // 1. If Requesting Changes: persist to MySQL database & approval history
+      if (decisionType === 'request_changes') {
+        await requestApplicationChanges(id, answerMessage.trim());
+      }
+
+      // 2. If Approving and auto-generate QR certificate is checked:
+      if (decisionType === 'approve' && autoGenerateQr && !certificateFile) {
+        const certResult = await issueCertificate({
+          application_id: id,
+          document_type_name: request.doc_type_name || 'Academic Certificate',
+          student_name: request.requested_by_name || 'Student',
+          student_usn: request.requested_by || 'USN',
+        });
+        fileToSend = new File([certResult.pdfBlob], certResult.filename, { type: 'application/pdf' });
+      }
+
+      if (fileToSend) {
+        const validation = validateUploadFile(fileToSend);
+        if (!validation.valid) {
+          alert(validation.error);
+          return;
+        }
+      }
+
+      const formattedMessage =
+        decisionType === 'request_changes'
+          ? `[CORRECTION_REQUIRED]: ${answerMessage.trim()}`
+          : answerMessage.trim();
+
       if (request.answer) {
         // Update existing answer
         await updateAnswer(id, {
-          message: answerMessage.trim(),
-          document: certificateFile || undefined,
+          message: formattedMessage,
+          document: fileToSend || undefined,
         });
       } else {
         // Post new answer
         await answerRequest(id, {
-          message: answerMessage.trim(),
-          document: certificateFile || undefined,
+          message: formattedMessage,
+          document: fileToSend || undefined,
         });
       }
 
       setCertificateFile(null);
       await fetchRequest();
-      alert('Decision submitted successfully!');
+      alert(
+        decisionType === 'approve'
+          ? 'Application Approved & Official Certificate with QR Code generated!'
+          : decisionType === 'request_changes'
+          ? 'Corrections requested. Student notified to edit and resubmit.'
+          : 'Decision recorded successfully.'
+      );
     } catch (err) {
-      console.error('Failed to submit answer:', err);
-      const detail = err.response?.data?.error?.message || 'Failed to submit decision.';
+      console.error('Failed to submit decision:', err);
+      const detail = err.response?.data?.error?.message || err.message || 'Failed to submit decision.';
       alert(detail);
     } finally {
       setAnswerLoading(false);
+    }
+  };
+
+  // Authorized Admin Reopen Application
+  const handleReopenApplication = async () => {
+    if (!window.confirm('Reopen this application? Status will revert to PENDING and the student will be permitted to edit.')) {
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      await reopenApplication(id, 'Admin reopened application for review');
+      await deleteAnswer(id);
+      await fetchRequest();
+      alert('Application reopened! Status is now PENDING.');
+    } catch (err) {
+      console.error('Failed to reopen application:', err);
+      alert('Failed to reopen application.');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -272,6 +343,9 @@ export const ReviewApplication = () => {
         </div>
       </div>
 
+      {/* AI Priority Assessment Banner */}
+      <AIPriorityCard request={request} />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Student Dossier & Request Reason */}
         <div className="space-y-6 lg:col-span-1">
@@ -375,12 +449,13 @@ export const ReviewApplication = () => {
             <div className="card p-4 bg-blue-50/50 border-blue-200 space-y-3">
               <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
                 <FileText className="w-4 h-4 text-blue-700" />
-                <span>Student Uploaded Document</span>
+                <span>Student Supporting Document</span>
               </div>
               <p className="text-[11px] text-blue-700">
-                The student has uploaded a completed form: <strong>{request.filled_form.filename}</strong>
+                Uploaded: <strong>{request.filled_form.filename}</strong>
               </p>
               <button
+                type="button"
                 onClick={handleDownloadStudentForm}
                 disabled={actionLoading}
                 className="btn-primary w-full text-xs py-2"
@@ -477,51 +552,57 @@ export const ReviewApplication = () => {
             </div>
 
             {/* Decision Mode Selector */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <button
                 type="button"
                 onClick={() => handleDecisionTypeChange('approve')}
-                className={`py-2.5 px-3 rounded-xl text-xs font-semibold border-2 transition-all flex flex-col items-center justify-center gap-1 ${
+                className={`py-3 px-3 rounded-xl text-xs font-semibold border-2 transition-all flex flex-col items-center justify-center gap-1.5 ${
                   decisionType === 'approve'
                     ? 'border-emerald-600 bg-emerald-50 text-emerald-900 shadow-sm'
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Approve & Issue</span>
+                <Award className="w-5 h-5 text-emerald-600" />
+                <span className="font-bold">Approve Certificate</span>
+                <span className="text-[10px] text-emerald-700 font-normal">Auto QR & PDF Sign</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDecisionTypeChange('request_changes')}
+                className={`py-3 px-3 rounded-xl text-xs font-semibold border-2 transition-all flex flex-col items-center justify-center gap-1.5 ${
+                  decisionType === 'request_changes'
+                    ? 'border-amber-600 bg-amber-50 text-amber-900 shadow-sm'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+                <span className="font-bold">Request Changes</span>
+                <span className="text-[10px] text-amber-700 font-normal">Student must edit & resubmit</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleDecisionTypeChange('reject')}
-                className={`py-2.5 px-3 rounded-xl text-xs font-semibold border-2 transition-all flex flex-col items-center justify-center gap-1 ${
+                className={`py-3 px-3 rounded-xl text-xs font-semibold border-2 transition-all flex flex-col items-center justify-center gap-1.5 ${
                   decisionType === 'reject'
                     ? 'border-red-600 bg-red-50 text-red-900 shadow-sm'
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <XCircle className="w-4 h-4 text-red-600" />
-                <span>Reject Request</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleDecisionTypeChange('request_info')}
-                className={`py-2.5 px-3 rounded-xl text-xs font-semibold border-2 transition-all flex flex-col items-center justify-center gap-1 ${
-                  decisionType === 'request_info'
-                    ? 'border-blue-600 bg-blue-50 text-blue-900 shadow-sm'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <HelpCircle className="w-4 h-4 text-blue-600" />
-                <span>Request Info / Form</span>
+                <XCircle className="w-5 h-5 text-red-600" />
+                <span className="font-bold">Reject Request</span>
+                <span className="text-[10px] text-red-700 font-normal">Declined with reason</span>
               </button>
             </div>
 
             <form onSubmit={handleAnswerSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Administrative Decision Message <span className="text-red-500">*</span>
+                  {decisionType === 'request_changes'
+                    ? 'Mandatory Correction Reason (visible to student):'
+                    : 'Administrative Decision Message:'}{' '}
+                  <span className="text-red-500">*</span>
                 </label>
                 <textarea
                   rows={4}
@@ -534,22 +615,45 @@ export const ReviewApplication = () => {
                 />
               </div>
 
+              {/* Automatic QR Code Checkbox for Approvals */}
+              {decisionType === 'approve' && (
+                <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2">
+                  <label className="flex items-center gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoGenerateQr}
+                      onChange={(e) => setAutoGenerateQr(e.target.checked)}
+                      className="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                      <QrCode className="w-4 h-4 text-indigo-600" />
+                      <span>Automatic QR Code & PDF Attestation Generator</span>
+                    </span>
+                  </label>
+                  <p className="text-[11px] text-indigo-700 pl-6 leading-relaxed">
+                    CampusDocs will automatically generate a cryptographically unique verification token, embed the official verification QR code into the institutional PDF, and record the attestation in the certificates ledger.
+                  </p>
+                </div>
+              )}
+
               {/* Certificate File Upload */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Attach Official Document / Certificate (Optional)
+                  {decisionType === 'approve'
+                    ? 'Custom Certificate Attachment (Optional - overrides auto generator)'
+                    : 'Attach Supporting Form / Document (Optional)'}
                 </label>
                 <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Upload className="w-5 h-5 text-slate-400" />
                     <div>
                       <span className="text-xs font-medium text-slate-700 block">
-                        {certificateFile ? certificateFile.name : 'Choose PDF or Word document'}
+                        {certificateFile ? certificateFile.name : 'Choose PDF document'}
                       </span>
                       <span className="text-[11px] text-slate-400">
                         {certificateFile
                           ? `${(certificateFile.size / 1024).toFixed(1)} KB`
-                          : 'Max size determined by server'}
+                          : 'PDF format recommended'}
                       </span>
                     </div>
                   </div>
@@ -557,7 +661,7 @@ export const ReviewApplication = () => {
                     <span>Browse File</span>
                     <input
                       type="file"
-                      accept=".pdf,.docx"
+                      accept=".pdf,.docx,.jpg,.jpeg,.png"
                       onChange={(e) => setCertificateFile(e.target.files?.[0] || null)}
                       className="hidden"
                     />
@@ -565,27 +669,46 @@ export const ReviewApplication = () => {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                {/* Reopen Action (If already answered) */}
+                {request.answer ? (
+                  <button
+                    type="button"
+                    onClick={handleReopenApplication}
+                    disabled={actionLoading}
+                    className="btn-secondary text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1.5 w-full sm:w-auto"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reopen Application for Correction</span>
+                  </button>
+                ) : <div />}
+
                 <button
                   type="submit"
                   disabled={answerLoading}
-                  className={`btn-primary text-xs ${
+                  className={`btn-primary text-xs w-full sm:w-auto ${
                     decisionType === 'reject'
                       ? 'bg-red-600 hover:bg-red-700'
-                      : decisionType === 'approve'
-                      ? 'bg-emerald-600 hover:bg-emerald-700'
-                      : 'bg-navy-900 hover:bg-navy-800'
+                      : decisionType === 'request_changes'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
                   {answerLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Submitting...</span>
+                      <span>Processing...</span>
                     </>
                   ) : (
                     <>
                       <Send className="w-4 h-4" />
-                      <span>Submit {decisionType === 'reject' ? 'Rejection' : 'Decision'}</span>
+                      <span>
+                        {decisionType === 'reject'
+                          ? 'Confirm Rejection'
+                          : decisionType === 'request_changes'
+                          ? 'Send Correction Request'
+                          : 'Approve & Issue Certificate'}
+                      </span>
                     </>
                   )}
                 </button>

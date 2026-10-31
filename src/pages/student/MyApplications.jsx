@@ -21,7 +21,9 @@ import {
   AlertCircle,
   FileCheck2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Edit3,
+  AlertTriangle
 } from 'lucide-react';
 
 export const MyApplications = () => {

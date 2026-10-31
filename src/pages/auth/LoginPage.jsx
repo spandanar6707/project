@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { GraduationCap, ShieldCheck, Mail, KeyRound, AlertCircle, Info, Loader2 } from 'lucide-react';
+import { GraduationCap, ShieldCheck, Mail, KeyRound, AlertCircle, Info, Loader2, ShieldAlert } from 'lucide-react';
+
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_SECONDS = 30;
 
 export const LoginPage = () => {
   const [isAdminMode, setIsAdminMode] = useState(false);
@@ -9,21 +12,46 @@ export const LoginPage = () => {
   const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockoutTimer, setLockoutTimer] = useState(0);
 
   const { loginAdmin, loginUser } = useAuth();
   const navigate = useNavigate();
 
+  // Handle countdown timer for brute-force lockout
+  useEffect(() => {
+    let interval = null;
+    if (lockoutTimer > 0) {
+      interval = setInterval(() => {
+        setLockoutTimer((prev) => {
+          if (prev <= 1) {
+            setFailedAttempts(0);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [lockoutTimer]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (lockoutTimer > 0) return;
+
     setError('');
     setLoading(true);
 
     try {
       if (isAdminMode) {
         const profile = await loginAdmin(email.trim(), otp.trim());
+        setFailedAttempts(0);
         navigate('/admin/dashboard');
       } else {
         const profile = await loginUser(email.trim(), otp.trim());
+        setFailedAttempts(0);
         if (profile.role === 'admin' || profile.role === 'office_staff') {
           navigate('/admin/dashboard');
         } else {
@@ -32,11 +60,17 @@ export const LoginPage = () => {
       }
     } catch (err) {
       console.error('Login error:', err);
-      const detail =
-        err.response?.data?.error?.message ||
-        err.response?.data?.detail ||
-        'Authentication failed. Please verify your email and OTP.';
-      setError(detail);
+      const newAttempts = failedAttempts + 1;
+      setFailedAttempts(newAttempts);
+
+      if (newAttempts >= MAX_FAILED_ATTEMPTS) {
+        setLockoutTimer(LOCKOUT_SECONDS);
+        setError(`Too many failed attempts. Temporary security lockout active for ${LOCKOUT_SECONDS} seconds.`);
+      } else {
+        // Generic, uniform error message to prevent account enumeration
+        const remaining = MAX_FAILED_ATTEMPTS - newAttempts;
+        setError(`Invalid credentials. Please verify your email and OTP. (${remaining} attempt${remaining === 1 ? '' : 's'} remaining)`);
+      }
     } finally {
       setLoading(false);
     }
@@ -159,9 +193,11 @@ export const LoginPage = () => {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || lockoutTimer > 0}
               className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-all shadow-sm flex items-center justify-center gap-2 ${
-                isAdminMode
+                lockoutTimer > 0
+                  ? 'bg-amber-600 text-white cursor-not-allowed opacity-80'
+                  : isAdminMode
                   ? 'bg-navy-950 hover:bg-navy-900 text-white'
                   : 'bg-blue-600 hover:bg-blue-700 text-white'
               } disabled:opacity-50`}
@@ -170,6 +206,11 @@ export const LoginPage = () => {
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>Verifying Credentials...</span>
+                </>
+              ) : lockoutTimer > 0 ? (
+                <>
+                  <ShieldAlert className="w-4 h-4" />
+                  <span>Locked Out ({lockoutTimer}s)</span>
                 </>
               ) : (
                 <span>Access Portal</span>

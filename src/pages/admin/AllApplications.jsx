@@ -27,8 +27,10 @@ import {
   Check,
   X,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  Sparkles
 } from 'lucide-react';
+import { evaluateApplicationPriority } from '../../utils/aiPriorityAssistant';
 
 export const AllApplications = () => {
   const { user } = useAuth();
@@ -41,6 +43,8 @@ export const AllApplications = () => {
   const [activeTab, setActiveTab] = useState(initialStatus);
   const [selectedDocTypeId, setSelectedDocTypeId] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('all'); // all, URGENT, HIGH, MEDIUM, NORMAL
+  const [sortByPriority, setSortByPriority] = useState(true);
 
   // Bulk Selection State
   const [selectedIds, setSelectedIds] = useState([]);
@@ -104,24 +108,48 @@ export const AllApplications = () => {
     );
   };
 
-  // Filter requests
-  const filteredRequests = requests.filter((req) => {
-    const q = searchQuery.toLowerCase();
-    const student = (req.requested_by_name || '').toLowerCase();
-    const email = (req.requested_by || '').toLowerCase();
-    const docType = (req.doc_type_name || '').toLowerCase();
-    const reqId = (req.request_id || '').toLowerCase();
-    const dept = (req.requested_by_dept || '').toLowerCase();
-    const reason = (req.reason || '').toLowerCase();
-    return (
-      student.includes(q) ||
-      email.includes(q) ||
-      docType.includes(q) ||
-      reqId.includes(q) ||
-      dept.includes(q) ||
-      reason.includes(q)
-    );
-  });
+  // Precompute priority counts for AI summary header
+  const priorityCounts = requests.reduce(
+    (acc, req) => {
+      const p = evaluateApplicationPriority(req);
+      acc[p.level] = (acc[p.level] || 0) + 1;
+      return acc;
+    },
+    { URGENT: 0, HIGH: 0, MEDIUM: 0, NORMAL: 0 }
+  );
+
+  // Filter & prioritize requests
+  const filteredRequests = requests
+    .map((req) => ({
+      ...req,
+      _priority: evaluateApplicationPriority(req),
+    }))
+    .filter((req) => {
+      if (priorityFilter !== 'all' && req._priority.level !== priorityFilter) {
+        return false;
+      }
+      const q = searchQuery.toLowerCase();
+      const student = (req.requested_by_name || '').toLowerCase();
+      const email = (req.requested_by || '').toLowerCase();
+      const docType = (req.doc_type_name || '').toLowerCase();
+      const reqId = (req.request_id || '').toLowerCase();
+      const dept = (req.requested_by_dept || '').toLowerCase();
+      const reason = (req.reason || '').toLowerCase();
+      return (
+        student.includes(q) ||
+        email.includes(q) ||
+        docType.includes(q) ||
+        reqId.includes(q) ||
+        dept.includes(q) ||
+        reason.includes(q)
+      );
+    })
+    .sort((a, b) => {
+      if (sortByPriority) {
+        return b._priority.score - a._priority.score;
+      }
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
 
   const pendingInView = filteredRequests.filter((r) => r.status === 'pending');
   const allPendingSelected =
@@ -412,6 +440,86 @@ export const AllApplications = () => {
             className="input-field pl-10"
           />
         </div>
+
+        {/* AI Priority Triage Summary Bar */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-50/70 p-3 rounded-xl border border-slate-200/60">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
+              <Sparkles className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <span className="font-bold text-slate-800">AI Priority Assistant:</span>
+              <span className="text-slate-500 text-[11px] ml-1">Automated urgency & SLA scoring</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 font-medium">
+              <button
+                type="button"
+                onClick={() => setPriorityFilter(priorityFilter === 'URGENT' ? 'all' : 'URGENT')}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 transition-all ${
+                  priorityFilter === 'URGENT'
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                    : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                <span>P1: Urgent ({priorityCounts.URGENT})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPriorityFilter(priorityFilter === 'HIGH' ? 'all' : 'HIGH')}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 transition-all ${
+                  priorityFilter === 'HIGH'
+                    ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                    : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>P2: High ({priorityCounts.HIGH})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPriorityFilter(priorityFilter === 'MEDIUM' ? 'all' : 'MEDIUM')}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 transition-all ${
+                  priorityFilter === 'MEDIUM'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                    : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                <span>P3: Medium ({priorityCounts.MEDIUM})</span>
+              </button>
+
+              {priorityFilter !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => setPriorityFilter('all')}
+                  className="text-[11px] text-slate-500 hover:text-slate-800 underline ml-1"
+                >
+                  Reset Priority
+                </button>
+              )}
+            </div>
+
+            <div className="h-4 w-px bg-slate-300 mx-1 hidden sm:block" />
+
+            <button
+              type="button"
+              onClick={() => setSortByPriority(!sortByPriority)}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-all ${
+                sortByPriority
+                  ? 'bg-navy-950 text-white border-navy-950'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {sortByPriority ? '⚡ Sorted: Urgency First' : '📅 Sorted: Date'}
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Applications Directory Table */}
@@ -450,6 +558,7 @@ export const AllApplications = () => {
                   <th className="py-3.5 px-4">Applicant Student</th>
                   <th className="py-3.5 px-4">Submission Date</th>
                   <th className="py-3.5 px-4">Status</th>
+                  <th className="py-3.5 px-4">AI Priority</th>
                   <th className="py-3.5 px-4">TAT Target</th>
                   <th className="py-3.5 px-4 text-right">Action</th>
                 </tr>
@@ -524,6 +633,16 @@ export const AllApplications = () => {
 
                       <td className="py-3.5 px-4 whitespace-nowrap">
                         {getStatusBadge(req.status)}
+                      </td>
+
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${req._priority.bgClass}`}
+                          title={req._priority.reasons.join(' | ')}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${req._priority.dotClass}`} />
+                          <span>{req._priority.badge}</span>
+                        </span>
                       </td>
 
                       <td className="py-3.5 px-4 text-xs text-slate-500 whitespace-nowrap">
